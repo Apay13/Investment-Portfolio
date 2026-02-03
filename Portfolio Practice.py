@@ -126,3 +126,230 @@ def aff_stats(stats):
     print()
     print(stats['matrice_covariance'].round(6))
 
+# ÉTAPE 4: OPTIMISATION DE MARKOWITZ
+
+def portfolio_performance(poids, rendements_moyens, matrice_cov):
+    """
+    Calcule la performance d'un portefeuille
+    
+    Paramètres:
+    -----------
+    poids : array
+        Poids de chaque actif (doivent sommer à 1)
+    rendements_moyens : Series
+        Rendements moyens annualisés
+    matrice_cov : DataFrame
+        Matrice de covariance
+    
+    Retour:
+    -------
+    tuple : (rendement du portefeuille, volatilité du portefeuille)
+    """
+    # Rendement du portefeuille = somme pondérée des rendements
+    rendement_portfolio = np.sum(poids * rendements_moyens)
+    
+    # Volatilité du portefeuille = sqrt(poids^T * Covariance * poids)
+    volatilite_portfolio = np.sqrt(np.dot(poids.T, np.dot(matrice_cov, poids)))
+    
+    return rendement_portfolio, volatilite_portfolio
+
+def ratio_sharpe_negatif(poids, rendements_moyens, matrice_cov, taux_sans_risque=0.02):
+    """
+    Calcule le ratio de Sharpe NÉGATIF (pour minimisation)
+    
+    Le ratio de Sharpe mesure le rendement excédentaire par unité de risque
+    Sharpe = (Rendement - Taux sans risque) / Volatilité
+    
+    On retourne la version négative car scipy.optimize MINIMISE
+    et on veut MAXIMISER le Sharpe
+    
+    Paramètres:
+    -----------
+    poids : array
+        Poids des actifs
+    rendements_moyens : Series
+        Rendements moyens annualisés
+    matrice_cov : DataFrame
+        Matrice de covariance
+    taux_sans_risque : float
+        Taux sans risque annuel (2% par défaut)
+    
+    Retour:
+    -------
+    float : -Sharpe ratio (négatif pour minimisation)
+    """
+    rdt, vol = performance_portefeuille(poids, rendements_moyens, matrice_cov)
+    return -(rdt - taux_sans_risque) / vol
+
+def optimiser_portefeuille(rendements_moyens, matrice_cov):
+    """
+    Trouve les portefeuilles optimaux selon deux critères:
+    1. Maximiser le ratio de Sharpe
+    2. Minimiser la volatilité
+    
+    Paramètres:
+    -----------
+    rendements_moyens : Series
+        Rendements moyens annualisés
+    matrice_cov : DataFrame
+        Matrice de covariance
+    
+    Retour:
+    -------
+    dict : Résultats d'optimisation pour les deux stratégies
+    """
+    n_actifs = len(rendements_moyens)
+    
+    # Contrainte : la somme des poids doit être égale à 1 (100%)
+    contraintes = [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]
+    
+    # Bornes : pas de vente à découvert (poids entre 0 et 1)
+    bornes = tuple((0, 1) for _ in range(n_actifs))
+    
+    # Point de départ : équipondération (tous les actifs ont le même poids)
+    poids_initial = np.array([1/n_actifs] * n_actifs)
+    
+    print(f"\n{'='*70}")
+    print("⚙️  OPTIMISATION EN COURS...")
+    print(f"{'='*70}")
+    
+    # OPTIMISATION 1: Maximiser le ratio de Sharpe
+    print("\n→ Recherche du portefeuille à Sharpe maximum...")
+    resultat_sharpe = minimize(
+        ratio_sharpe_negatif,           # Fonction à minimiser
+        poids_initial,                   # Point de départ
+        args=(rendements_moyens, matrice_cov),  # Arguments supplémentaires
+        method='SLSQP',                  # Méthode d'optimisation
+        bounds=bornes,                   # Contraintes sur les poids
+        constraints=contraintes          # Somme = 1
+    )
+    
+    # OPTIMISATION 2: Minimiser la volatilité
+    print("→ Recherche du portefeuille à volatilité minimum...")
+    resultat_min_vol = minimize(
+        lambda poids: performance_portefeuille(poids, rendements_moyens, matrice_cov)[1],
+        poids_initial,
+        method='SLSQP',
+        bounds=bornes,
+        constraints=contraintes
+    )
+    
+    print("✓ Optimisation terminée!")
+    
+    return {
+        'max_sharpe': resultat_sharpe,
+        'min_volatilite': resultat_min_vol
+    }
+
+
+def afficher_portefeuilles_optimaux(resultats_optim, stats, tickers):
+    """
+    Affiche les résultats des portefeuilles optimaux
+    
+    Paramètres:
+    -----------
+    resultats_optim : dict
+        Résultats de l'optimisation
+    stats : dict
+        Statistiques des actifs
+    tickers : list
+        Liste des symboles boursiers
+    """
+    print(f"\n{'='*70}")
+    print("🎯 PORTEFEUILLES OPTIMAUX")
+    print(f"{'='*70}")
+    
+    # PORTEFEUILLE 1: Max Sharpe
+    max_sharpe = resultats_optim['max_sharpe']
+    rdt_sharpe, vol_sharpe = performance_portefeuille(
+        max_sharpe.x, stats['rendements_moyens'], stats['matrice_covariance']
+    )
+    sharpe_ratio = (rdt_sharpe - 0.02) / vol_sharpe
+    
+    print("\n🏆 PORTEFEUILLE À SHARPE MAXIMUM")
+    print(f"{'-'*70}")
+    print(f"  Rendement annuel espéré : {rdt_sharpe*100:>6.2f}%")
+    print(f"  Volatilité (risque)      : {vol_sharpe*100:>6.2f}%")
+    print(f"  Ratio de Sharpe          : {sharpe_ratio:>6.4f}")
+    print(f"\n  💡 Ce portefeuille offre le meilleur compromis rendement/risque")
+    print(f"\n  Allocation des actifs:")
+    for i, ticker in enumerate(tickers):
+        poids = max_sharpe.x[i] * 100
+        if poids > 0.5:  # Afficher seulement si > 0.5%
+            print(f"    {ticker:>6} : {poids:>6.2f}%")
+    
+    # PORTEFEUILLE 2: Min Volatilité
+    min_vol = resultats_optim['min_volatilite']
+    rdt_min, vol_min = performance_portefeuille(
+        min_vol.x, stats['rendements_moyens'], stats['matrice_covariance']
+    )
+    sharpe_min = (rdt_min - 0.02) / vol_min
+    
+    print(f"\n🛡️  PORTEFEUILLE À VOLATILITÉ MINIMUM")
+    print(f"{'-'*70}")
+    print(f"  Rendement annuel espéré : {rdt_min*100:>6.2f}%")
+    print(f"  Volatilité (risque)      : {vol_min*100:>6.2f}%")
+    print(f"  Ratio de Sharpe          : {sharpe_min:>6.4f}")
+    print(f"\n  💡 Ce portefeuille minimise le risque (idéal pour profil conservateur)")
+    print(f"\n  Allocation des actifs:")
+    for i, ticker in enumerate(tickers):
+        poids = min_vol.x[i] * 100
+        if poids > 0.5:  # Afficher seulement si > 0.5%
+            print(f"    {ticker:>6} : {poids:>6.2f}%")
+
+def afficher_portefeuilles_optimaux(resultats_optim, stats, tickers):
+    """
+    Affiche les résultats des portefeuilles optimaux
+    
+    Paramètres:
+    -----------
+    resultats_optim : dict
+        Résultats de l'optimisation
+    stats : dict
+        Statistiques des actifs
+    tickers : list
+        Liste des symboles boursiers
+    """
+    print(f"\n{'='*70}")
+    print("🎯 PORTEFEUILLES OPTIMAUX")
+    print(f"{'='*70}")
+    
+    # PORTEFEUILLE 1: Max Sharpe
+    max_sharpe = resultats_optim['max_sharpe']
+    rdt_sharpe, vol_sharpe = performance_portefeuille(
+        max_sharpe.x, stats['rendements_moyens'], stats['matrice_covariance']
+    )
+    sharpe_ratio = (rdt_sharpe - 0.02) / vol_sharpe
+    
+    print("\n🏆 PORTEFEUILLE À SHARPE MAXIMUM")
+    print(f"{'-'*70}")
+    print(f"  Rendement annuel espéré : {rdt_sharpe*100:>6.2f}%")
+    print(f"  Volatilité (risque)      : {vol_sharpe*100:>6.2f}%")
+    print(f"  Ratio de Sharpe          : {sharpe_ratio:>6.4f}")
+    print(f"\n  💡 Ce portefeuille offre le meilleur compromis rendement/risque")
+    print(f"\n  Allocation des actifs:")
+    for i, ticker in enumerate(tickers):
+        poids = max_sharpe.x[i] * 100
+        if poids > 0.5:  # Afficher seulement si > 0.5%
+            print(f"    {ticker:>6} : {poids:>6.2f}%")
+    
+    # PORTEFEUILLE 2: Min Volatilité
+    min_vol = resultats_optim['min_volatilite']
+    rdt_min, vol_min = performance_portefeuille(
+        min_vol.x, stats['rendements_moyens'], stats['matrice_covariance']
+    )
+    sharpe_min = (rdt_min - 0.02) / vol_min
+    
+    print(f"\n🛡️  PORTEFEUILLE À VOLATILITÉ MINIMUM")
+    print(f"{'-'*70}")
+    print(f"  Rendement annuel espéré : {rdt_min*100:>6.2f}%")
+    print(f"  Volatilité (risque)      : {vol_min*100:>6.2f}%")
+    print(f"  Ratio de Sharpe          : {sharpe_min:>6.4f}")
+    print(f"\n  💡 Ce portefeuille minimise le risque (idéal pour profil conservateur)")
+    print(f"\n  Allocation des actifs:")
+    for i, ticker in enumerate(tickers):
+        poids = min_vol.x[i] * 100
+        if poids > 0.5:  # Afficher seulement si > 0.5%
+            print(f"    {ticker:>6} : {poids:>6.2f}%")
+
+     
