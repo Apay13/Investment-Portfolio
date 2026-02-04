@@ -52,33 +52,84 @@ def importer_donnees(tickers, date_debut, date_fin):
     # Téléchargement des données
     data = yf.download(tickers, start=date_debut, end=date_fin, progress=False)
     
-    # Récupération des prix de clôture ajustés
-    if len(tickers) == 1:
-        prix = data['Adj Close'].to_frame()
-        prix.columns = tickers
+    # ===== VÉRIFICATION : Données téléchargées =====
+    if data.empty:
+        raise ValueError(f"\n❌ ERREUR : Aucune donnée téléchargée.\n"
+                        f"   Vérifiez votre connexion internet et les symboles boursiers.")
+    
+    # ===== DEBUG : Afficher la structure =====
+    print(f"\n[DEBUG] Type de colonnes: {type(data.columns)}")
+    print(f"[DEBUG] Colonnes: {data.columns.tolist() if hasattr(data.columns, 'tolist') else data.columns}")
+    
+    # ===== EXTRACTION DES PRIX =====
+    prix = None
+    
+    # Méthode 1 : Colonnes multi-index (cas normal avec plusieurs tickers)
+    if isinstance(data.columns, pd.MultiIndex):
+        if 'Adj Close' in data.columns.get_level_values(0):
+            prix = data['Adj Close'].copy()
+            print("[DEBUG] Méthode 1 : Multi-index avec 'Adj Close'")
+        elif 'Close' in data.columns.get_level_values(0):
+            prix = data['Close'].copy()
+            print("[DEBUG] Méthode 1 : Multi-index avec 'Close'")
+    
+    # Méthode 2 : Colonnes simples (un seul ticker ou format différent)
     else:
-        prix = data['Adj Close']
+        if 'Adj Close' in data.columns:
+            prix = data[['Adj Close']].copy()
+            prix.columns = tickers
+            print("[DEBUG] Méthode 2 : Colonnes simples avec 'Adj Close'")
+        elif 'Close' in data.columns:
+            prix = data[['Close']].copy()
+            prix.columns = tickers
+            print("[DEBUG] Méthode 2 : Colonnes simples avec 'Close'")
+    
+    # Méthode 3 : Télécharger ticker par ticker en cas d'échec
+    if prix is None:
+        print("\n[DEBUG] Méthode 3 : Téléchargement ticker par ticker...")
+        prix = pd.DataFrame()
+        for ticker in tickers:
+            try:
+                temp = yf.download(ticker, start=date_debut, end=date_fin, progress=False)
+                if not temp.empty:
+                    if 'Adj Close' in temp.columns:
+                        prix[ticker] = temp['Adj Close']
+                    elif 'Close' in temp.columns:
+                        prix[ticker] = temp['Close']
+                    print(f"  ✓ {ticker} téléchargé")
+                else:
+                    print(f"  ✗ {ticker} échec")
+            except:
+                print(f"  ✗ {ticker} erreur")
+    
+    # Vérification finale
+    if prix is None or prix.empty:
+        raise ValueError(f"\n❌ ERREUR : Impossible d'extraire les prix.\n"
+                        f"   Format de données: {type(data.columns)}\n"
+                        f"   Colonnes disponibles: {data.columns}\n"
+                        f"   Essayez de relancer le script ou changez de tickers.")
     
     # ===== VÉRIFICATION 1 : Données manquantes =====
     colonnes_invalides = prix.columns[prix.isna().all()].tolist()
     if colonnes_invalides:
         print(f"\n⚠️  ATTENTION : Échec du téléchargement pour : {', '.join(colonnes_invalides)}")
         print(f"   Ces tickers seront supprimés de l'analyse.")
-        prix = prix.dropna(axis=1, how='all')  # Supprimer colonnes entièrement vides
+        prix = prix.dropna(axis=1, how='all')
     
     # ===== VÉRIFICATION 2 : Au moins 2 actifs nécessaires =====
     if len(prix.columns) < 2:
         raise ValueError(f"\n❌ ERREUR : Il faut au moins 2 actifs valides pour Markowitz.\n"
                         f"   Actifs valides trouvés : {len(prix.columns)}\n"
+                        f"   Tickers en échec : {colonnes_invalides}\n"
                         f"   Vérifiez les symboles boursiers et réessayez.")
     
     # ===== VÉRIFICATION 3 : Données suffisantes =====
+    prix = prix.dropna()  # Supprimer lignes avec NaN
+    
     if len(prix) < 50:
         raise ValueError(f"\n❌ ERREUR : Pas assez de données ({len(prix)} jours).\n"
-                        f"   Minimum requis : 50 jours de cotation.")
-    
-    # Supprimer les lignes avec des NaN (jours manquants)
-    prix = prix.dropna()
+                        f"   Minimum requis : 50 jours de cotation.\n"
+                        f"   Essayez une période plus longue.")
     
     # Affichage des informations
     print(f"\n✓ Données téléchargées avec succès!")
