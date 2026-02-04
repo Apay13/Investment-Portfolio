@@ -710,9 +710,19 @@ def tracer_frontiere_efficiente(frontiere, aleatoires, stats, resultats_optim, t
     
     plt.tight_layout()
     
-    # Sauvegarder le graphique
-    plt.savefig('/mnt/user-data/outputs/frontiere_efficiente.png', dpi=300, bbox_inches='tight')
-    print("\n✓ Graphique sauvegardé : frontiere_efficiente.png")
+    # Sauvegarder le graphique (compatible Windows et Linux)
+    import os
+    
+    # Déterminer le chemin de sauvegarde selon l'OS
+    if os.path.exists('/mnt/user-data/outputs/'):
+        # Système Linux (Claude.ai)
+        chemin_sortie = '/mnt/user-data/outputs/frontiere_efficiente.png'
+    else:
+        # Système Windows/Mac (local)
+        chemin_sortie = 'frontiere_efficiente.png'
+    
+    plt.savefig(chemin_sortie, dpi=300, bbox_inches='tight')
+    print(f"\n✓ Graphique sauvegardé : {chemin_sortie}")
     
     plt.show()
 
@@ -800,12 +810,38 @@ def main():
     print(f"\n{'='*70}")
     print("✅ ANALYSE TERMINÉE AVEC SUCCÈS!")
     print(f"{'='*70}")
-    print("\n📊 Points clés de la théorie de Markowitz :")
+    
+    # Récapitulatif des résultats
+    max_sharpe = resultats_optim['max_sharpe']
+    min_vol = resultats_optim['min_volatilite']
+    rdt_sharpe, vol_sharpe = performance_portefeuille(
+        max_sharpe.x, stats['rendements_moyens'], stats['matrice_covariance']
+    )
+    rdt_min, vol_min = performance_portefeuille(
+        min_vol.x, stats['rendements_moyens'], stats['matrice_covariance']
+    )
+    
+    print("\n📊 RÉSUMÉ DES RÉSULTATS:")
+    print(f"  {'─'*66}")
+    print(f"  {'Portefeuille':<30} {'Rendement':>12} {'Risque':>12} {'Sharpe':>10}")
+    print(f"  {'─'*66}")
+    print(f"  {'Max Sharpe Ratio':<30} {rdt_sharpe*100:>11.2f}% {vol_sharpe*100:>11.2f}% {(rdt_sharpe-0.02)/vol_sharpe:>10.4f}")
+    print(f"  {'Min Volatilité':<30} {rdt_min*100:>11.2f}% {vol_min*100:>11.2f}% {(rdt_min-0.02)/vol_min:>10.4f}")
+    print(f"  {'─'*66}")
+    
+    print("\n💡 POINTS CLÉS DE LA THÉORIE DE MARKOWITZ:")
     print("  • La frontière efficiente montre tous les portefeuilles optimaux")
     print("  • La diversification réduit le risque grâce aux corrélations")
     print("  • Le portefeuille Max Sharpe offre le meilleur ratio rendement/risque")
     print("  • Le portefeuille Min Volatilité est idéal pour un profil conservateur")
-    print("\n💾 Fichier sauvegardé : frontiere_efficiente.png")
+    print("  • Aucun portefeuille ne peut être au-dessus de la frontière")
+    print("  • Tous les portefeuilles sous la frontière sont sous-optimaux")
+    
+    print(f"\n💾 Fichiers générés:")
+    if os.path.exists('/mnt/user-data/outputs/'):
+        print(f"  • frontiere_efficiente.png (dans /mnt/user-data/outputs/)")
+    else:
+        print(f"  • frontiere_efficiente.png (dans le répertoire courant)")
     print()
 
 
