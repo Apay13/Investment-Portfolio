@@ -11,9 +11,36 @@ from scipy.optimize import minimize
 import yfinance as yf
 from datetime import datetime, timedelta
 
+# ============================================================
+# CONFIGURATION CENTRALISÉE
+# ============================================================
+
+CONFIG = {
+    # Paramètres du portfolio
+    'tickers': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'JPM'],
+    'periode_annees': 3,  # Nombre d'années de données historiques
+    
+    # Paramètres financiers
+    'taux_sans_risque': 0.02,  # 2% (taux des obligations d'État)
+    'jours_trading_annee': 252,  # Nombre de jours de trading par an
+    
+    # Paramètres d'optimisation
+    'n_portefeuilles_frontiere': 100,  # Nombre de points sur la frontière
+    'n_portefeuilles_aleatoires': 5000,  # Pour visualisation
+    
+    # Paramètres d'affichage
+    'afficher_debug': False,  # Activer/désactiver les messages debug
+    'seuil_affichage_poids': 0.5,  # Afficher les poids > 0.5%
+    
+    # Paramètres graphiques
+    'style_graphique': 'seaborn-v0_8-darkgrid',
+    'taille_figure': (18, 7),
+    'dpi_export': 300,
+}
+
 # Configuration de matplotlib
-plt.style.use('seaborn-v0_8-darkgrid')
-plt.rcParams['figure.figsize'] = (12, 6)
+plt.style.use(CONFIG['style_graphique'])
+plt.rcParams['figure.figsize'] = CONFIG['taille_figure']
 
 print("✓ Imports réussis")
 print("Bibliothèques disponibles:")
@@ -57,36 +84,40 @@ def importer_donnees(tickers, date_debut, date_fin):
         raise ValueError(f"\n❌ ERREUR : Aucune donnée téléchargée.\n"
                         f"   Vérifiez votre connexion internet et les symboles boursiers.")
     
-    # ===== DEBUG : Afficher la structure =====
-    print(f"\n[DEBUG] Type de colonnes: {type(data.columns)}")
-    print(f"[DEBUG] Colonnes: {data.columns.tolist() if hasattr(data.columns, 'tolist') else data.columns}")
-    
     # ===== EXTRACTION DES PRIX =====
     prix = None
+    
+    def debug_print(message):
+        """Affiche les messages de debug si activé dans CONFIG"""
+        if CONFIG['afficher_debug']:
+            print(f"[DEBUG] {message}")
+    
+    debug_print(f"Type de colonnes: {type(data.columns)}")
+    debug_print(f"Colonnes: {data.columns.tolist() if hasattr(data.columns, 'tolist') else data.columns}")
     
     # Méthode 1 : Colonnes multi-index (cas normal avec plusieurs tickers)
     if isinstance(data.columns, pd.MultiIndex):
         if 'Adj Close' in data.columns.get_level_values(0):
             prix = data['Adj Close'].copy()
-            print("[DEBUG] Méthode 1 : Multi-index avec 'Adj Close'")
+            debug_print("Méthode 1 : Multi-index avec 'Adj Close'")
         elif 'Close' in data.columns.get_level_values(0):
             prix = data['Close'].copy()
-            print("[DEBUG] Méthode 1 : Multi-index avec 'Close'")
+            debug_print("Méthode 1 : Multi-index avec 'Close'")
     
     # Méthode 2 : Colonnes simples (un seul ticker ou format différent)
     else:
         if 'Adj Close' in data.columns:
             prix = data[['Adj Close']].copy()
             prix.columns = tickers
-            print("[DEBUG] Méthode 2 : Colonnes simples avec 'Adj Close'")
+            debug_print("Méthode 2 : Colonnes simples avec 'Adj Close'")
         elif 'Close' in data.columns:
             prix = data[['Close']].copy()
             prix.columns = tickers
-            print("[DEBUG] Méthode 2 : Colonnes simples avec 'Close'")
+            debug_print("Méthode 2 : Colonnes simples avec 'Close'")
     
     # Méthode 3 : Télécharger ticker par ticker en cas d'échec
     if prix is None:
-        print("\n[DEBUG] Méthode 3 : Téléchargement ticker par ticker...")
+        debug_print("Méthode 3 : Téléchargement ticker par ticker...")
         prix = pd.DataFrame()
         for ticker in tickers:
             try:
@@ -96,11 +127,11 @@ def importer_donnees(tickers, date_debut, date_fin):
                         prix[ticker] = temp['Adj Close']
                     elif 'Close' in temp.columns:
                         prix[ticker] = temp['Close']
-                    print(f"  ✓ {ticker} téléchargé")
+                    debug_print(f"{ticker} téléchargé")
                 else:
-                    print(f"  ✗ {ticker} échec")
+                    debug_print(f"{ticker} échec")
             except:
-                print(f"  ✗ {ticker} erreur")
+                debug_print(f"{ticker} erreur")
     
     # Vérification finale
     if prix is None or prix.empty:
@@ -409,7 +440,7 @@ def afficher_portefeuilles_optimaux(resultats_optim, stats, tickers):
     print(f"\n  Allocation des actifs:")
     for i, ticker in enumerate(tickers):
         poids = max_sharpe.x[i] * 100
-        if poids > 0.5:  # Afficher seulement si > 0.5%
+        if poids > CONFIG['seuil_affichage_poids']:  # Utiliser CONFIG
             print(f"    {ticker:>6} : {poids:>6.2f}%")
     
     # PORTEFEUILLE 2: Min Volatilité
@@ -428,7 +459,7 @@ def afficher_portefeuilles_optimaux(resultats_optim, stats, tickers):
     print(f"\n  Allocation des actifs:")
     for i, ticker in enumerate(tickers):
         poids = min_vol.x[i] * 100
-        if poids > 0.5:  # Afficher seulement si > 0.5%
+        if poids > CONFIG['seuil_affichage_poids']:  # Utiliser CONFIG
             print(f"    {ticker:>6} : {poids:>6.2f}%")
 
 
@@ -728,6 +759,190 @@ def tracer_frontiere_efficiente(frontiere, aleatoires, stats, resultats_optim, t
 
 
 # ============================================================
+# EXPORTS DES RÉSULTATS
+# ============================================================
+
+def exporter_resultats_excel(stats, resultats_optim, frontiere, tickers, nom_fichier='resultats_markowitz.xlsx'):
+    """
+    Exporte tous les résultats dans un fichier Excel multi-onglets
+    
+    Paramètres:
+    -----------
+    stats : dict
+        Statistiques des actifs
+    resultats_optim : dict
+        Résultats de l'optimisation
+    frontiere : DataFrame
+        Points de la frontière efficiente
+    tickers : list
+        Liste des symboles boursiers
+    nom_fichier : str
+        Nom du fichier Excel à créer
+    """
+    import os
+    
+    # Déterminer le chemin de sauvegarde
+    if os.path.exists('/mnt/user-data/outputs/'):
+        chemin = f'/mnt/user-data/outputs/{nom_fichier}'
+    else:
+        chemin = nom_fichier
+    
+    print(f"\n📝 Exportation des résultats vers Excel...")
+    
+    with pd.ExcelWriter(chemin, engine='openpyxl') as writer:
+        
+        # ONGLET 1 : Statistiques des actifs
+        stats_df = pd.DataFrame({
+            'Ticker': tickers,
+            'Rendement Annuel (%)': stats['rendements_moyens'].values * 100,
+            'Volatilité (%)': stats['volatilite'].values * 100,
+            'Variance': stats['variance'].values,
+        })
+        stats_df.to_excel(writer, sheet_name='Statistiques', index=False)
+        
+        # ONGLET 2 : Matrice de corrélation
+        corr_df = stats['matrice_correlation'].copy()
+        corr_df.to_excel(writer, sheet_name='Corrélation')
+        
+        # ONGLET 3 : Matrice de covariance
+        cov_df = stats['matrice_covariance'].copy()
+        cov_df.to_excel(writer, sheet_name='Covariance')
+        
+        # ONGLET 4 : Portefeuilles optimaux
+        max_sharpe = resultats_optim['max_sharpe']
+        min_vol = resultats_optim['min_volatilite']
+        
+        rdt_sharpe, vol_sharpe = performance_portefeuille(
+            max_sharpe.x, stats['rendements_moyens'], stats['matrice_covariance']
+        )
+        rdt_min, vol_min = performance_portefeuille(
+            min_vol.x, stats['rendements_moyens'], stats['matrice_covariance']
+        )
+        
+        portfolios_df = pd.DataFrame({
+            'Ticker': tickers,
+            'Poids Max Sharpe (%)': max_sharpe.x * 100,
+            'Poids Min Volatilité (%)': min_vol.x * 100,
+        })
+        
+        # Ajouter les métriques en bas
+        metriques = pd.DataFrame({
+            'Ticker': ['', 'MÉTRIQUES:', 'Rendement (%)', 'Volatilité (%)', 'Sharpe Ratio'],
+            'Poids Max Sharpe (%)': ['', '', rdt_sharpe*100, vol_sharpe*100, (rdt_sharpe-0.02)/vol_sharpe],
+            'Poids Min Volatilité (%)': ['', '', rdt_min*100, vol_min*100, (rdt_min-0.02)/vol_min],
+        })
+        
+        result_df = pd.concat([portfolios_df, metriques], ignore_index=True)
+        result_df.to_excel(writer, sheet_name='Portfolios Optimaux', index=False)
+        
+        # ONGLET 5 : Frontière efficiente
+        frontiere_export = frontiere[['rendement', 'volatilite', 'sharpe']].copy()
+        frontiere_export.columns = ['Rendement', 'Volatilité', 'Sharpe Ratio']
+        frontiere_export['Rendement'] = frontiere_export['Rendement'] * 100
+        frontiere_export['Volatilité'] = frontiere_export['Volatilité'] * 100
+        frontiere_export.to_excel(writer, sheet_name='Frontière Efficiente', index=False)
+    
+    print(f"✓ Résultats exportés : {chemin}")
+    return chemin
+
+
+def exporter_resultats_csv(stats, resultats_optim, tickers, nom_fichier='portfolios_optimaux.csv'):
+    """
+    Exporte les portefeuilles optimaux en CSV
+    
+    Paramètres:
+    -----------
+    stats : dict
+        Statistiques des actifs
+    resultats_optim : dict
+        Résultats de l'optimisation
+    tickers : list
+        Liste des symboles boursiers
+    nom_fichier : str
+        Nom du fichier CSV à créer
+    """
+    import os
+    
+    # Déterminer le chemin de sauvegarde
+    if os.path.exists('/mnt/user-data/outputs/'):
+        chemin = f'/mnt/user-data/outputs/{nom_fichier}'
+    else:
+        chemin = nom_fichier
+    
+    max_sharpe = resultats_optim['max_sharpe']
+    min_vol = resultats_optim['min_volatilite']
+    
+    csv_df = pd.DataFrame({
+        'Ticker': tickers,
+        'Poids_Max_Sharpe': max_sharpe.x,
+        'Poids_Min_Volatilite': min_vol.x,
+    })
+    
+    csv_df.to_csv(chemin, index=False)
+    print(f"✓ CSV exporté : {chemin}")
+    return chemin
+
+
+def tracer_heatmap_correlation(stats, tickers, nom_fichier='heatmap_correlation.png'):
+    """
+    Crée une heatmap de la matrice de corrélation
+    
+    Paramètres:
+    -----------
+    stats : dict
+        Statistiques des actifs
+    tickers : list
+        Liste des symboles boursiers
+    nom_fichier : str
+        Nom du fichier image à créer
+    """
+    import os
+    
+    print(f"\n🎨 Création de la heatmap de corrélation...")
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # Créer la heatmap
+    corr_matrix = stats['matrice_correlation']
+    im = ax.imshow(corr_matrix, cmap='RdYlGn', aspect='auto', vmin=-1, vmax=1)
+    
+    # Ajouter la colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Corrélation', rotation=270, labelpad=20, fontsize=12)
+    
+    # Configurer les axes
+    ax.set_xticks(np.arange(len(tickers)))
+    ax.set_yticks(np.arange(len(tickers)))
+    ax.set_xticklabels(tickers, fontsize=11)
+    ax.set_yticklabels(tickers, fontsize=11)
+    
+    # Rotation des labels
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    
+    # Ajouter les valeurs dans chaque cellule
+    for i in range(len(tickers)):
+        for j in range(len(tickers)):
+            text = ax.text(j, i, f'{corr_matrix.iloc[i, j]:.2f}',
+                          ha="center", va="center", color="black", fontsize=10, fontweight='bold')
+    
+    ax.set_title("Matrice de Corrélation des Actifs", fontsize=14, fontweight='bold', pad=20)
+    
+    plt.tight_layout()
+    
+    # Sauvegarder
+    if os.path.exists('/mnt/user-data/outputs/'):
+        chemin = f'/mnt/user-data/outputs/{nom_fichier}'
+    else:
+        chemin = nom_fichier
+    
+    plt.savefig(chemin, dpi=CONFIG['dpi_export'], bbox_inches='tight')
+    print(f"✓ Heatmap sauvegardée : {chemin}")
+    
+    plt.close()
+    return chemin
+
+
+# ============================================================
 # FONCTION PRINCIPALE - EXÉCUTION COMPLÈTE
 # ============================================================
 
@@ -735,6 +950,8 @@ def main():
     """
     Fonction principale qui exécute toutes les étapes de l'analyse Markowitz
     """
+    import os
+    
     print("\n" + "="*70)
     print("  🎓 OPTIMISATION DE PORTFOLIO - MÉTHODE DE MARKOWITZ")
     print("="*70)
@@ -743,10 +960,9 @@ def main():
     print("  pour un niveau de risque donné.\n")
     
     # ===== CONFIGURATION =====
-    # Modifiez ces paramètres selon vos besoins
-    tickers_demandes = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'JPM']
+    tickers_demandes = CONFIG['tickers']
     date_fin = datetime.now().strftime('%Y-%m-%d')
-    date_debut = (datetime.now() - timedelta(days=365*3)).strftime('%Y-%m-%d')
+    date_debut = (datetime.now() - timedelta(days=365*CONFIG['periode_annees'])).strftime('%Y-%m-%d')
     
     # ===== ÉTAPE 1 : IMPORTATION DES DONNÉES =====
     print(f"\n{'─'*70}")
@@ -755,7 +971,6 @@ def main():
     
     try:
         prix = importer_donnees(tickers_demandes, date_debut, date_fin)
-        # Récupérer les tickers RÉELLEMENT téléchargés (peut être différent si échec)
         tickers = prix.columns.tolist()
     except ValueError as e:
         print(e)
@@ -768,7 +983,6 @@ def main():
     print(f"{'─'*70}")
     rendements = calculer_rendements(prix)
     
-    # Vérification : rendements valides
     if len(rendements) == 0:
         print("\n❌ ERREUR : Impossible de calculer les rendements (données insuffisantes).")
         return
@@ -785,7 +999,7 @@ def main():
     print("ÉTAPE 4 : Optimisation de Markowitz")
     print(f"{'─'*70}")
     resultats_optim = optimiser_portefeuille(stats['rendements_moyens'], stats['matrice_covariance'])
-    afficher_portefeuilles_optimaux(resultats_optim, stats, tickers)  # Utiliser tickers réels
+    afficher_portefeuilles_optimaux(resultats_optim, stats, tickers)
     
     # ===== ÉTAPE 5 : FRONTIÈRE EFFICIENTE =====
     print(f"\n{'─'*70}")
@@ -795,16 +1009,34 @@ def main():
     frontiere = calculer_frontiere_efficiente(
         stats['rendements_moyens'], 
         stats['matrice_covariance'], 
-        n_portefeuilles=100
+        n_portefeuilles=CONFIG['n_portefeuilles_frontiere']
     )
     
     aleatoires = generer_portefeuilles_aleatoires(
         stats['rendements_moyens'], 
         stats['matrice_covariance'], 
-        n_portefeuilles=5000
+        n_portefeuilles=CONFIG['n_portefeuilles_aleatoires']
     )
     
     tracer_frontiere_efficiente(frontiere, aleatoires, stats, resultats_optim, tickers)
+    
+    # ===== ÉTAPE 6 : EXPORTS =====
+    print(f"\n{'─'*70}")
+    print("ÉTAPE 6 : Export des résultats")
+    print(f"{'─'*70}")
+    
+    # Export Excel
+    try:
+        exporter_resultats_excel(stats, resultats_optim, frontiere, tickers)
+    except Exception as e:
+        print(f"⚠️  Impossible d'exporter Excel : {e}")
+        print("   Installez openpyxl avec : pip install openpyxl")
+    
+    # Export CSV
+    exporter_resultats_csv(stats, resultats_optim, tickers)
+    
+    # Heatmap de corrélation
+    tracer_heatmap_correlation(stats, tickers)
     
     # ===== RÉSUMÉ FINAL =====
     print(f"\n{'='*70}")
@@ -825,8 +1057,8 @@ def main():
     print(f"  {'─'*66}")
     print(f"  {'Portefeuille':<30} {'Rendement':>12} {'Risque':>12} {'Sharpe':>10}")
     print(f"  {'─'*66}")
-    print(f"  {'Max Sharpe Ratio':<30} {rdt_sharpe*100:>11.2f}% {vol_sharpe*100:>11.2f}% {(rdt_sharpe-0.02)/vol_sharpe:>10.4f}")
-    print(f"  {'Min Volatilité':<30} {rdt_min*100:>11.2f}% {vol_min*100:>11.2f}% {(rdt_min-0.02)/vol_min:>10.4f}")
+    print(f"  {'Max Sharpe Ratio':<30} {rdt_sharpe*100:>11.2f}% {vol_sharpe*100:>11.2f}% {(rdt_sharpe-CONFIG['taux_sans_risque'])/vol_sharpe:>10.4f}")
+    print(f"  {'Min Volatilité':<30} {rdt_min*100:>11.2f}% {vol_min*100:>11.2f}% {(rdt_min-CONFIG['taux_sans_risque'])/vol_min:>10.4f}")
     print(f"  {'─'*66}")
     
     print("\n💡 POINTS CLÉS DE LA THÉORIE DE MARKOWITZ:")
@@ -837,11 +1069,19 @@ def main():
     print("  • Aucun portefeuille ne peut être au-dessus de la frontière")
     print("  • Tous les portefeuilles sous la frontière sont sous-optimaux")
     
-    print(f"\n💾 Fichiers générés:")
+    print(f"\n💾 FICHIERS GÉNÉRÉS:")
     if os.path.exists('/mnt/user-data/outputs/'):
-        print(f"  • frontiere_efficiente.png (dans /mnt/user-data/outputs/)")
+        print(f"  • frontiere_efficiente.png")
+        print(f"  • heatmap_correlation.png")
+        print(f"  • resultats_markowitz.xlsx")
+        print(f"  • portfolios_optimaux.csv")
+        print(f"  (dans /mnt/user-data/outputs/)")
     else:
-        print(f"  • frontiere_efficiente.png (dans le répertoire courant)")
+        print(f"  • frontiere_efficiente.png")
+        print(f"  • heatmap_correlation.png")
+        print(f"  • resultats_markowitz.xlsx")
+        print(f"  • portfolios_optimaux.csv")
+        print(f"  (dans le répertoire courant)")
     print()
 
 
